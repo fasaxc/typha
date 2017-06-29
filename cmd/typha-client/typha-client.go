@@ -31,30 +31,22 @@ import (
 	"github.com/projectcalico/typha/pkg/config"
 	"github.com/projectcalico/typha/pkg/logutils"
 	"github.com/projectcalico/typha/pkg/syncclient"
+	"os"
+	"fmt"
+	"github.com/projectcalico/libcalico-go/lib/backend/model"
 )
 
 const usage = `Test client for Typha, Calico's fan-out proxy.
 
 Usage:
-  typha-client [options]
+  typha-client [options] dump
+  typha-client [options] watch
 
 Options:
   --version                    Print the version and exit.
+  --log-level=<LEVEL>          Set the log level [default: info].
   --server=<ADDR>              Set the server to connect to [default: localhost:5473].
 `
-
-type syncerCallbacks struct {
-	updateCount int
-}
-
-func (s *syncerCallbacks) OnStatusUpdated(status api.SyncStatus) {
-	log.WithField("status", status).Info("Status received")
-}
-
-func (s *syncerCallbacks) OnUpdates(updates []api.Update) {
-	s.updateCount += len(updates)
-	log.WithField("numUpdates", len(updates)).WithField("total", s.updateCount).Info("Updates received")
-}
 
 func main() {
 	// Go's RNG is not seeded by default.  Do that now.
@@ -62,10 +54,6 @@ func main() {
 
 	// Set up logging.
 	logutils.ConfigureEarlyLogging()
-	logutils.ConfigureLogging(&config.Config{
-		LogSeverityScreen:       "info",
-		DebugDisableLogDropping: true,
-	})
 
 	// Parse command-line args.
 	version := "Version:            " + buildinfo.GitVersion + "\n" +
@@ -76,22 +64,76 @@ func main() {
 		println(usage)
 		log.Fatalf("Failed to parse usage, exiting: %v", err)
 	}
+
+	logutils.ConfigureLogging(&config.Config{
+		LogSeverityScreen:       arguments["--log-level"].(string),
+		DebugDisableLogDropping: true,
+	})
+
 	buildInfoLogCxt := log.WithFields(log.Fields{
 		"version":    buildinfo.GitVersion,
 		"buildDate":  buildinfo.BuildDate,
 		"gitCommit":  buildinfo.GitRevision,
 		"GOMAXPROCS": runtime.GOMAXPROCS(0),
 	})
-	buildInfoLogCxt.Info("Typha starting up")
+	buildInfoLogCxt.Info("Typha test client starting up")
 	log.Infof("Command line arguments: %v", arguments)
 
-	callbacks := &syncerCallbacks{}
+	var callbacks api.SyncerCallbacks
+	if arguments["watch"] == true {
+		callbacks = &watcher{}
+	} else {
+		callbacks = &dumper{}
+	}
 	addr := arguments["--server"].(string)
-	client := syncclient.New(addr, buildinfo.GitVersion, "test-host", "some info", callbacks)
+	client := syncclient.New(
+		addr,
+		buildinfo.GitVersion,
+		"test-host",
+		"some info",
+		callbacks,
+	)
 	err = client.Start(context.Background())
 	if err != nil {
 		log.WithError(err).Panic("Client failed")
 	}
 	client.Finished.Wait()
 	log.Panic("Client failed")
+}
+
+type watcher struct {
+	updateCount int
+}
+
+func (s *watcher) OnStatusUpdated(status api.SyncStatus) {
+	log.WithField("status", status).Info("Status received")
+}
+
+func (s *watcher) OnUpdates(updates []api.Update) {
+	s.updateCount += len(updates)
+	log.WithField("numUpdates", len(updates)).WithField("total", s.updateCount).Info("Updates received")
+}
+
+type dumper struct {}
+
+func (s *dumper) OnStatusUpdated(status api.SyncStatus) {
+	log.WithField("status", status).Info("Status received")
+	if status == api.InSync {
+		log.Info("Received whole snapshot, exiting")
+		os.Exit(0)
+	}
+}
+
+func (s *dumper) OnUpdates(updates []api.Update) {
+	for _, u := range updates {
+		val, err := model.SerializeValue(&u.KVPair)
+		if err != nil {
+			log.WithError(err).Panic("Failed to re-serialize update")
+		}
+		key, err := model.KeyToDefaultPath(u.Key)
+		if err != nil {
+			log.WithError(err).Panic("Failed to re-serialize key")
+		}
+		fmt.Printf("%s = %s\n", key, val)
+	}
 }

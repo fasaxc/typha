@@ -59,10 +59,17 @@ MY_GID:=$(shell id -g)
 # Build the calico/typha docker image, which contains only Typha.
 .PHONY: calico/typha
 calico/typha: bin/calico-typha
-	rm -rf docker-image/bin
-	mkdir -p docker-image/bin
-	cp bin/calico-typha docker-image/bin/
-	docker build --pull -t calico/typha docker-image
+	rm -rf docker-images/typha/bin
+	mkdir -p docker-images/typha/bin
+	cp bin/calico-typha docker-images/typha/bin/
+	docker build --pull -t calico/typha docker-images/typha
+
+.PHONY: calico/typha-client
+calico/typha-client: bin/typha-client
+	rm -rf docker-images/client/bin
+	mkdir -p docker-images/client/bin
+	cp bin/typha-client docker-images/client/bin/
+	docker build --pull -t calico/typha-client docker-images/client
 
 # Pre-configured docker run command that runs as this user with the repo
 # checked out to /code, uses the --rm flag to avoid leaving the container
@@ -225,7 +232,7 @@ bin/calico-typha.transfer-url: bin/calico-typha
 .PHONY: clean
 clean:
 	rm -rf bin \
-	       docker-image/bin \
+	       docker-image/typha/bin \
 	       build \
 	       $(GENERATED_GO_FILES) \
 	       .glide \
