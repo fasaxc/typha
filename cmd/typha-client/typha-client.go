@@ -46,6 +46,7 @@ Options:
   --version                    Print the version and exit.
   --log-level=<LEVEL>          Set the log level [default: info].
   --server=<ADDR>              Set the server to connect to [default: localhost:5473].
+  --print-all                  Print all updates, no just post-resync.
 `
 
 func main() {
@@ -81,7 +82,9 @@ func main() {
 
 	var callbacks api.SyncerCallbacks
 	if arguments["watch"] == true {
-		callbacks = &watcher{}
+		callbacks = &watcher{
+			printAll: arguments["--print-all"].(bool),
+		}
 	} else {
 		callbacks = &dumper{}
 	}
@@ -102,16 +105,31 @@ func main() {
 }
 
 type watcher struct {
-	updateCount int
+	printAll bool
+	inSync bool
 }
 
 func (s *watcher) OnStatusUpdated(status api.SyncStatus) {
-	log.WithField("status", status).Info("Status received")
+	fmt.Printf("====== Status update: %v ======\n", status)
+	if status == api.InSync {
+		s.inSync = true
+	}
 }
 
 func (s *watcher) OnUpdates(updates []api.Update) {
-	s.updateCount += len(updates)
-	log.WithField("numUpdates", len(updates)).WithField("total", s.updateCount).Info("Updates received")
+	for _, u := range updates {
+		val, err := model.SerializeValue(&u.KVPair)
+		if err != nil {
+			log.WithError(err).Panic("Failed to re-serialize update")
+		}
+		key, err := model.KeyToDefaultPath(u.Key)
+		if err != nil {
+			log.WithError(err).Panic("Failed to re-serialize key")
+		}
+		if s.printAll || s.inSync {
+			fmt.Printf("%s = %s\n", key, val)
+		}
+	}
 }
 
 type dumper struct {}
